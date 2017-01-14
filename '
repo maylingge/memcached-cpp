@@ -27,20 +27,20 @@ static int init_count = 0;
 static pthread_mutex_t init_lock;
 static pthread_cond_t init_cond;
 
-static void cq_push(CQ& connq, CQ_ITEM& item) {
-  cout<<connq.cq.size()<<endl;
-  pthread_mutex_lock(&connq.lock);
-  connq.cq.push(item);
-  cout<<connq.cq.size()<<endl;
-  pthread_mutex_unlock(&connq.lock);
+static void cq_push(CQ* connq, CQ_ITEM* item) {
+  cout<<connq->cq.size()<<endl;
+  pthread_mutex_lock(&connq->lock);
+  connq->cq.push(item);
+  cout<<connq->cq.size()<<endl;
+  pthread_mutex_unlock(&connq->lock);
 }
 
-static CQ_ITEM cq_pop(CQ& connq) {
-    if (!connq.cq.empty()) {
-      pthread_mutex_lock(&connq.lock);
-      CQ_ITEM item = connq.cq.front();
-      connq.cq.pop();
-      pthread_mutex_unlock(&connq.lock);
+static CQ_ITEM* cq_pop(CQ* connq) {
+    if (!connq->cq.empty()) {
+      pthread_mutex_lock(&connq->lock);
+      CQ_ITEM* item = connq->cq.front();
+      connq->cq.pop();
+      pthread_mutex_unlock(&connq->lock);
       return item;
     }
 }
@@ -136,9 +136,9 @@ static void thread_libevent_process(int fd, short which, void *arg) {
 
     switch (buf[0]) {
     case 'c':
-      CQ_ITEM item = cq_pop(me->new_conn);
+      CQ_ITEM* item = cq_pop(me->new_conn);
       
-      struct bufferevent *bev = bufferevent_socket_new(me->base, item.fd, BEV_OPT_CLOSE_ON_FREE);
+      struct bufferevent *bev = bufferevent_socket_new(me->base, item->fd, BEV_OPT_CLOSE_ON_FREE);
       set_tcp_no_delay(fd);
 
       bufferevent_setcb(bev, echo_read_cb, NULL, echo_event_cb, NULL);
@@ -182,7 +182,8 @@ static void *worker_libevent(void *arg) {
 
 void thread_init() {
   log_info("Thread_init");
-  evthread = new EVThread;
+  evthread = (EVThread*)malloc(sizeof(EVThread));
+  evthread->new_conn = (CQ*)malloc(sizeof(CQ));
   
   pthread_mutex_init(&init_lock, NULL);
   pthread_cond_init(&init_cond, NULL);
@@ -216,7 +217,8 @@ static void accept_conn_cb(struct evconnlistener *listener,
   log_info("Accept");
   CQ_ITEM item;
   item.fd = fd;
-  cq_push(evthread->new_conn, item);
+  cq_push(evthread->new_conn, &item);
+  cout<<evthread->new_conn->cq.size()<<endl;
   char buf[1];
   buf[0] = 'c';
   if (write(evthread->notify_send_fd, buf, 1) != 1) {

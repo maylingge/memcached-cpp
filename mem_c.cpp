@@ -1,6 +1,6 @@
 #include <event2/event.h>
 #include <iostream>
-#include <logging.h>
+#include "logging.h"
 #include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <stdlib.h>
@@ -39,6 +39,7 @@ static void readcb(struct bufferevent* bev, void* ctx)
   
   log_info((char*)message);
   free(message);
+  bufferevent_free(bev);
 }
 int main(int argc, char **argv)
 {
@@ -75,8 +76,8 @@ int main(int argc, char **argv)
   log_info("event dispatch.");
   event_base_dispatch(eb);
 
-  bufferevent_free(bev);
-  event_base_free(eb);
+  // bufferevent_free(bev);
+  //event_base_free(eb);
   
   return 0;
 }
