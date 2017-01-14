@@ -20,18 +20,17 @@
 
 using namespace std;
 
-static EVThread* evthread;
+static std::vector<EVThread*> evthreads;
 static int nthreads = 1;
 static int init_count = 0;
-
+static int cur_thread = 0;
 static pthread_mutex_t init_lock;
 static pthread_cond_t init_cond;
 
 static void cq_push(CQ& connq, CQ_ITEM& item) {
-  cout<<connq.cq.size()<<endl;
   pthread_mutex_lock(&connq.lock);
   connq.cq.push(item);
-  cout<<connq.cq.size()<<endl;
+  cout<<"Queue: " << connq.cq.size()<<endl;
   pthread_mutex_unlock(&connq.lock);
 }
 
@@ -137,6 +136,7 @@ static void thread_libevent_process(int fd, short which, void *arg) {
     switch (buf[0]) {
     case 'c':
       CQ_ITEM item = cq_pop(me->new_conn);
+      cout<<"Current thread: " << me->thread_id<<endl;
       
       struct bufferevent *bev = bufferevent_socket_new(me->base, item.fd, BEV_OPT_CLOSE_ON_FREE);
       set_tcp_no_delay(fd);
@@ -182,24 +182,27 @@ static void *worker_libevent(void *arg) {
 
 void thread_init() {
   log_info("Thread_init");
-  evthread = new EVThread;
   
   pthread_mutex_init(&init_lock, NULL);
   pthread_cond_init(&init_cond, NULL);
 
-  int fds[2];
-  if (pipe(fds)) {
-      log_err("Can't create notify pipe");
-      exit(1);
+  for (int i=0;i<nthreads;i++) {
+    EVThread* evthread = new EVThread;
+    evthreads.push_back(evthread);
+
+    int fds[2];
+    if (pipe(fds)) {
+        log_err("Can't create notify pipe");
+        exit(1);
+    }
+  
+    evthread->notify_receive_fd = fds[0];
+    evthread->notify_send_fd = fds[1];
+    
+    setup_thread(evthread);
+
+    create_worker(worker_libevent, evthread); 
   }
-  
-  evthread->notify_receive_fd = fds[0];
-  evthread->notify_send_fd = fds[1];
-  
-  setup_thread(evthread);
-
-  create_worker(worker_libevent, evthread); 
-
 
   pthread_mutex_lock(&init_lock);
   wait_for_thread_registration(nthreads);
@@ -214,12 +217,15 @@ static void accept_conn_cb(struct evconnlistener *listener,
 {
   /* We got a new connection! Set up a bufferevent for it. */
   log_info("Accept");
+  int next = (cur_thread++) % evthreads.size();
+  cout<<"Thread: " << next<<endl;
   CQ_ITEM item;
   item.fd = fd;
-  cq_push(evthread->new_conn, item);
+  cq_push(evthreads[next]->new_conn, item);
   char buf[1];
   buf[0] = 'c';
-  if (write(evthread->notify_send_fd, buf, 1) != 1) {
+
+  if (write(evthreads[next]->notify_send_fd, buf, 1) != 1) {
     log_err("Failed to write to thread notify pipe");
   }
 }
@@ -227,9 +233,12 @@ static void accept_conn_cb(struct evconnlistener *listener,
 int main(int argc, char **argv)
 {
   int port = 9876;
-
   if (argc > 1) {
     port = atoi(argv[1]);
+  }
+
+  if (argc > 2) {
+    nthreads = atoi(argv[2]);
   }
   
   struct event_base* base = event_base_new();
